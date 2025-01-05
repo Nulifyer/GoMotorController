@@ -1,0 +1,1 @@
+scp ./bin/arm64/motor-controller-arm64 root@DietPi1:/usr/bin/motor-controller
