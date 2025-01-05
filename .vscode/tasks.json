@@ -1,0 +1,15 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build for ARM64",
+            "type": "shell",
+            "command": "GOOS=linux GOARCH=arm64 go build -o ${workspaceFolder}/bin/arm64/motor-controller-arm64",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": []
+        }
+    ]
+}
