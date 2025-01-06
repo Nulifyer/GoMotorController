@@ -7,6 +7,14 @@ type KalmanFilter struct {
 	p float64 // Estimation error covariance
 }
 
+func NewKalmanFilters(q float64, r float64, channelCount int) []*KalmanFilter {
+	filters := make([]*KalmanFilter, channelCount)
+	for i := 0; i < channelCount; i++ {
+		filters[i] = NewKalmanFilter(q, r)
+	}
+	return filters
+}
+
 func NewKalmanFilter(q, r float64) *KalmanFilter {
 	return &KalmanFilter{
 		q: q,
