@@ -10,31 +10,19 @@ import (
 	"github.com/warthog618/go-gpiocdev"
 )
 
-const (
-	syncThreshold = 3000 * time.Microsecond // Sync pulse > 3ms
-	channelCount  = 8                       // Number of PPM channels
-)
-
 var (
 	lastTime time.Time
 	ppmData  []time.Duration
 	ppmReady bool
 )
 
-const smoothFactor = 0.1 // Smoothing factor (0.1 for a low-pass filter effect)
+var kalmanFilters = make([]*KalmanFilter, PPM_CHANNELCOUNT)
 
-var lastSmoothedPulse time.Duration
-
-var lastSmoothedPulses = make([]time.Duration, channelCount) // Store smoothed pulses for each channel
-
-// Smooths the pulse width using a low-pass filter (exponential moving average)
-func lowPassFilter(channel int, pulseWidth time.Duration) time.Duration {
-	if lastSmoothedPulses[channel] == 0 {
-		lastSmoothedPulses[channel] = pulseWidth
+func init() {
+	// Initialize Kalman filters for each channel
+	for i := 0; i < PPM_CHANNELCOUNT; i++ {
+		kalmanFilters[i] = NewKalmanFilter(0.1, 10.0) // Example q and r values
 	}
-	smoothed := time.Duration(float64(lastSmoothedPulses[channel]) + smoothFactor*float64(pulseWidth-lastSmoothedPulses[channel]))
-	lastSmoothedPulses[channel] = smoothed
-	return smoothed
 }
 
 func ppmEventHandler(evt gpiocdev.LineEvent) {
@@ -43,13 +31,13 @@ func ppmEventHandler(evt gpiocdev.LineEvent) {
 	lastTime = now
 
 	if evt.Type == gpiocdev.LineEventRisingEdge {
-		if pulseWidth > syncThreshold {
+		if pulseWidth > PPM_SYNCTHRESHOLD {
 			// Sync pulse detected, process data if valid
-			if len(ppmData) == channelCount {
+			if len(ppmData) == PPM_CHANNELCOUNT {
 				fmt.Print("\rChannels: ")
 				for i, d := range ppmData {
-					smoothedValue := lowPassFilter(i, d)
-					fmt.Printf("[%d]: %4dµs(%4dµs) ", i+1, smoothedValue.Microseconds(), d.Microseconds())
+					smoothedValue := kalmanFilters[i].Update(float64(d.Microseconds()))
+					fmt.Printf("[%d]: %4.0fµs(%4dµs) ", i+1, smoothedValue, d.Microseconds())
 				}
 				ppmReady = true
 			}
@@ -63,11 +51,8 @@ func ppmEventHandler(evt gpiocdev.LineEvent) {
 }
 
 func main() {
-	offset := 70
-	chip := "gpiochip0"
-
 	// Request GPIO line with event handler for rising edges
-	l, err := gpiocdev.RequestLine(chip, offset,
+	l, err := gpiocdev.RequestLine(CHIP_NAME, PIN_PPM,
 		gpiocdev.WithPullUp,
 		gpiocdev.WithRisingEdge,
 		gpiocdev.WithEventHandler(ppmEventHandler))
@@ -87,7 +72,7 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt)
 
-	fmt.Printf("Listening for PPM signals on %s:%d...\n", chip, offset)
+	fmt.Printf("Listening for PPM signals on %s:%d...\n", CHIP_NAME, PIN_PPM)
 
 	// Run until interrupted
 	running := true
