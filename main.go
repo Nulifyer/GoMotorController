@@ -10,6 +10,39 @@ import (
 	"github.com/warthog618/go-gpiocdev"
 )
 
+// chip & pin numbers
+const (
+	CHIP_NAME = "gpiochip0"
+
+	PIN_PPM   = 70
+	PIN_ECS_1 = 0
+	PIN_ECS_2 = 0
+	PIN_ECS_3 = 0
+	PIN_ECS_4 = 0
+)
+
+// ppm settings
+const (
+	PPM_SYNCTHRESHOLD       = 3000 * time.Microsecond
+	PPM_CHANNELCOUNT        = 8
+	PPM_CONNECTED_THRESHOLD = 900
+)
+
+// channel names
+const (
+	CHAN_STICK_RIGHT_X = 0
+	CHAN_STICK_RIGHT_Y = 1
+	CHAN_STICK_LEFT_Y  = 2
+	CHAN_STICK_LEFT_X  = 3
+	CHAN_SWITCH_RIGHT  = 4
+	CHAN_DIAL_RIGHT    = 5
+	CHAN_SWITCH_LEFT   = 6
+	CHAN_DIAL_LEFT     = 7
+
+	CHAN_THROTTLE = CHAN_STICK_LEFT_Y
+)
+
+// PPM variables
 var (
 	lastTime     time.Time
 	rawPPMData   []time.Duration
@@ -18,9 +51,9 @@ var (
 )
 
 func main() {
-	// Initialize timing
+	// Initialize timing for PPM
 	lastTime = time.Now()
-
+	ppmConnected = false
 	// Request GPIO line with event handler for rising edges
 	l, err := gpiocdev.RequestLine(CHIP_NAME, PIN_PPM,
 		gpiocdev.WithPullUp,
@@ -42,17 +75,22 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt)
 	running := true
+	connected := false
 	for running {
+		if ppmConnected && time.Now().Sub(lastTime) > PPM_SYNCTHRESHOLD*10 {
+			ppmConnected = false
+		}
+
 		select {
 		case <-sigChan:
 			running = false
 		default:
-			time.Sleep(100 * time.Millisecond)
-			if ppmConnected {
-				//fmt.Print("\rPPM frame processed.")
-				ppmConnected = false
-			} else {
-				fmt.Print("\rListening for PPM signals...\n")
+			if ppmConnected && !connected {
+				connected = true
+				fmt.Println("\nConnected...")
+			} else if !ppmConnected && connected {
+				connected = false
+				fmt.Println("\nDisconnected...")
 			}
 		}
 	}
@@ -60,12 +98,14 @@ func main() {
 	fmt.Println("\nPPM reader exiting...")
 }
 
-func ppmFrameCallback(frame *[]float64) {
+func ppmFrameCallback(frame []float64) {
 	// print filtered frame
 	fmt.Print("\r")
-	for i, v := range *frame {
+	for i, v := range frame {
 		fmt.Printf("[%d]: %4.0fµs ", i+1, v)
 	}
+
+	ppmConnected = frame[CHAN_THROTTLE] > PPM_CONNECTED_THRESHOLD
 }
 
 // processes line events into the PPM frame
@@ -82,8 +122,7 @@ func ppmEventHandler(evt gpiocdev.LineEvent) {
 				for i, d := range rawPPMData {
 					filteredValues[i] = filters[i].Update(float64(d.Microseconds()))
 				}
-				ppmFrameCallback(&filteredValues)
-				ppmConnected = true
+				ppmFrameCallback(filteredValues)
 			}
 			// Reset for next frame
 			rawPPMData = nil
