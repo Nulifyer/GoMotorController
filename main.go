@@ -77,14 +77,16 @@ func main() {
 	running := true
 	connected := false
 	for running {
-		if ppmConnected && time.Now().Sub(lastTime) > PPM_SYNCTHRESHOLD*10 {
-			ppmConnected = false
-		}
-
 		select {
 		case <-sigChan:
 			running = false
 		default:
+			// main loop
+
+			if ppmConnected && time.Now().Sub(lastTime) > PPM_SYNCTHRESHOLD*10 {
+				ppmConnected = false
+			}
+
 			if ppmConnected && !connected {
 				connected = true
 				fmt.Println("\nConnected...")
@@ -95,7 +97,7 @@ func main() {
 		}
 	}
 
-	fmt.Println("\nPPM reader exiting...")
+	fmt.Println("\nexiting motor controller...")
 }
 
 func ppmFrameCallback(frame []float64) {
