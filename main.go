@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -12,18 +13,29 @@ import (
 
 // chip & pin numbers
 const (
+	PC9  = 73
+	PC6  = 70
+	PC5  = 69
+	PC8  = 72
+	PC11 = 75
+	PC15 = 79
+	PC14 = 78
+	PC7  = 71
+	PC10 = 74
+)
+const (
 	CHIP_NAME = "gpiochip0"
 
-	PIN_PPM   = 70
-	PIN_ECS_1 = 0
-	PIN_ECS_2 = 0
-	PIN_ECS_3 = 0
-	PIN_ECS_4 = 0
+	PIN_PPM   = PC6
+	PIN_ECS_1 = PC5
+	PIN_ECS_2 = PC8
+	PIN_ECS_3 = PC11
+	PIN_ECS_4 = PC15
 )
 
 // ppm settings
 const (
-	PPM_SYNCTHRESHOLD       = 3000 * time.Microsecond
+	PPM_SYNCTHRESHOLD       = 3 * time.Millisecond
 	PPM_CHANNELCOUNT        = 8
 	PPM_CONNECTED_THRESHOLD = 900
 )
@@ -50,31 +62,85 @@ var (
 	filters      = NewKalmanFilters(0.1, 10.0, PPM_CHANNELCOUNT)
 )
 
+// motor pwm controls
+const (
+	MOTOR_COUNT = 4
+	PWM_CYCLE   = 3 * time.Millisecond
+
+	MOTOR_FRONT_LEFT  = 0
+	MOTOR_FRONT_RIGHT = 1
+	MOTOR_BACK_LEFT   = 2
+	MOTOR_BACK_RIGHT  = 3
+)
+
+var (
+	pwmLines []*PwmLineOutput
+)
+
 func main() {
+	var wg sync.WaitGroup
+
 	// Initialize timing for PPM
 	lastTime = time.Now()
 	ppmConnected = false
-	// Request GPIO line with event handler for rising edges
-	l, err := gpiocdev.RequestLine(CHIP_NAME, PIN_PPM,
-		gpiocdev.WithPullUp,
-		gpiocdev.WithRisingEdge,
-		gpiocdev.WithEventHandler(ppmEventHandler))
-	if err != nil {
-		fmt.Printf("RequestLine returned error: %s\n", err)
-		if err == syscall.Errno(22) {
-			fmt.Println("Note that the WithPullUp option requires Linux 5.5 or later - check your kernel version.")
+	running := true
+
+	wg.Add(1)
+	go func() {
+		// Request GPIO line with event handler for rising edges
+		ppm_line, err := gpiocdev.RequestLine(CHIP_NAME, PIN_PPM,
+			gpiocdev.WithPullUp,
+			gpiocdev.WithRisingEdge,
+			gpiocdev.WithEventHandler(ppmEventHandler))
+		if err != nil {
+			fmt.Printf("RequestLine returned error: %s\n", err)
+			if err == syscall.Errno(22) {
+				fmt.Println("Note that the WithPullUp option requires Linux 5.5 or later - check your kernel version.")
+			}
+			os.Exit(1)
+		} else {
+			fmt.Printf("Listening for PPM signals on %s:%d...\n", CHIP_NAME, PIN_PPM)
 		}
+		for running {
+		}
+		defer ppm_line.Close()
+		defer wg.Done()
+	}()
+
+	// setup pwm outputs
+	chip, err := gpiocdev.NewChip(CHIP_NAME)
+	if err != nil {
+		fmt.Printf("NewChip returned error: %s\n", err)
 		os.Exit(1)
-	} else {
-		fmt.Printf("Listening for PPM signals on %s:%d...\n", CHIP_NAME, PIN_PPM)
 	}
-	defer l.Close()
+
+	pwmLines = make([]*PwmLineOutput, MOTOR_COUNT)
+	pwmLines[MOTOR_FRONT_LEFT] = NewPwmLineOutput(chip, PIN_ECS_1, PWM_CYCLE)
+	fmt.Printf("PWM Motor FRONT_LEFT output on %s:%d...\n", CHIP_NAME, PIN_ECS_1)
+
+	pwmLines[MOTOR_FRONT_RIGHT] = NewPwmLineOutput(chip, PIN_ECS_2, PWM_CYCLE)
+	fmt.Printf("PWM Motor FRONT_RIGHT output on %s:%d...\n", CHIP_NAME, PIN_ECS_2)
+
+	pwmLines[MOTOR_BACK_LEFT] = NewPwmLineOutput(chip, PIN_ECS_3, PWM_CYCLE)
+	fmt.Printf("PWM Motor BACK_LEFT output on %s:%d...\n", CHIP_NAME, PIN_ECS_3)
+
+	pwmLines[MOTOR_BACK_RIGHT] = NewPwmLineOutput(chip, PIN_ECS_4, PWM_CYCLE)
+	fmt.Printf("PWM Motor BACK_RIGHT output on %s:%d...\n", CHIP_NAME, PIN_ECS_4)
+
+	// start pwm signals
+	for i, v := range pwmLines {
+		wg.Add(1)
+		go func() {
+			v.OutputPwm()
+			wg.Done()
+		}()
+		fmt.Printf("PWM Motor %d output started...\n", i)
+	}
 
 	// Capture SIGINT (Ctrl+C) to exit gracefully
 	// Run until interrupted
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt)
-	running := true
 	connected := false
 	for running {
 		select {
@@ -97,6 +163,12 @@ func main() {
 		}
 	}
 
+	// signal to stop and clean up
+	for _, v := range pwmLines {
+		v.StopOutput()
+	}
+	wg.Wait()
+
 	fmt.Println("\nexiting motor controller...")
 }
 
@@ -108,6 +180,10 @@ func ppmFrameCallback(frame []float64) {
 	}
 
 	ppmConnected = frame[CHAN_THROTTLE] > PPM_CONNECTED_THRESHOLD
+
+	for _, v := range pwmLines {
+		v.SetValue(time.Duration(frame[CHAN_THROTTLE]) * time.Microsecond)
+	}
 }
 
 // processes line events into the PPM frame
