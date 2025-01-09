@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"syscall"
 	"time"
@@ -14,7 +13,7 @@ type PpmLineInput struct {
 	lastTime       time.Time
 	sync_threshold time.Duration
 	channelCount   int
-	channels       []int64
+	channels       []int
 	rawPulsesIdx   int
 	rawPulses      []time.Duration
 	filters        []*KalmanFilter
@@ -25,7 +24,7 @@ func NewPpmLineInput(chip *gpiocdev.Chip, lineNum int, num_channels int, sync_th
 		line:           nil,
 		sync_threshold: sync_threshold,
 		channelCount:   num_channels,
-		channels:       make([]int64, num_channels),
+		channels:       make([]int, num_channels),
 		rawPulsesIdx:   -1,
 		rawPulses:      make([]time.Duration, num_channels),
 		filters:        NewKalmanFilters(0.1, 10.0, num_channels),
@@ -54,10 +53,10 @@ func (ppm *PpmLineInput) Stop() {
 
 func (ppm *PpmLineInput) FrameCallback() {
 	// print filtered frame
-	fmt.Print("\r")
-	for i, v := range ppm.channels {
-		fmt.Printf("[%d]: %dµs ", i+1, v)
-	}
+	// fmt.Print("\r")
+	// for i, v := range ppm.channels {
+	// 	fmt.Printf("[%d]: %dµs ", i+1, v)
+	// }
 }
 
 func (ppm *PpmLineInput) ppmEventHandler(evt gpiocdev.LineEvent) {
@@ -70,7 +69,7 @@ func (ppm *PpmLineInput) ppmEventHandler(evt gpiocdev.LineEvent) {
 			// Sync pulse detected, process data if valid
 			if ppm.rawPulsesIdx == ppm.channelCount-1 {
 				for i, d := range ppm.rawPulses {
-					ppm.channels[i] = int64(ppm.filters[i].Update(float64(d.Microseconds())))
+					ppm.channels[i] = int(ppm.filters[i].Update(float64(d.Microseconds())))
 				}
 				ppm.FrameCallback()
 			}

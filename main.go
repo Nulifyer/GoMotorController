@@ -38,6 +38,8 @@ const (
 	PPM_SYNCTHRESHOLD       = 3 * time.Millisecond
 	PPM_CHANNELCOUNT        = 8
 	PPM_CONNECTED_THRESHOLD = 900
+	PPM_LOW                 = 1000
+	PPM_HIGH                = 2000
 )
 
 // channel names
@@ -56,8 +58,11 @@ const (
 
 // motor pwm controls
 const (
+	MOTOR_HIGH = 2400
+	MOTOR_LOW  = 700
+
 	MOTOR_COUNT = 4
-	PWM_CYCLE   = 3 * time.Millisecond
+	PWM_CYCLE   = MOTOR_HIGH * time.Microsecond
 
 	MOTOR_FRONT_LEFT  = 0
 	MOTOR_FRONT_RIGHT = 1
@@ -97,7 +102,7 @@ func main() {
 		PIN_ECS_4, // MOTOR_BACK_RIGHT
 	}
 	for i, v := range motor_pins {
-		pwm, err := NewPwmLineOutput(chip, v, 1000, 0)
+		pwm, err := NewPwmLineOutput(chip, v, 0, PWM_CYCLE)
 		if err != nil {
 			log.Fatalf("unable to create PWM line on %d: %v", v, err)
 			os.Exit(1)
@@ -121,6 +126,7 @@ func main() {
 	signal.Notify(sigChan, os.Interrupt)
 	connected := false
 	ppmConnected := false
+	armed := false
 	for running {
 		select {
 		case <-sigChan:
@@ -131,14 +137,43 @@ func main() {
 		default:
 			// main loop
 
-			if ppm.channels[CHAN_THROTTLE] < 900 || time.Now().Sub(ppm.lastTime) > 20*time.Millisecond {
+			if ppm.channels[CHAN_THROTTLE] < PPM_CONNECTED_THRESHOLD || time.Now().Sub(ppm.lastTime) > 20*time.Millisecond {
 				ppmConnected = false
-			} else if ppm.channels[CHAN_THROTTLE] > 900 {
+			} else if ppm.channels[CHAN_THROTTLE] > PPM_CONNECTED_THRESHOLD {
 				ppmConnected = true
 			}
 
-			for _, v := range pwmLines {
-				v.SetFrequency(int(ppm.channels[CHAN_THROTTLE]))
+			if !armed {
+				if ppm.channels[CHAN_SWITCH_LEFT] < 1100 {
+					for _, v := range pwmLines {
+						v.SetFrequency(0)
+					}
+				} else if ppm.channels[CHAN_SWITCH_LEFT] > 1900 {
+					fmt.Println("\nArming...")
+					for _, v := range pwmLines {
+						v.SetFrequency(MOTOR_HIGH)
+					}
+					time.Sleep(700 * time.Millisecond)
+					for _, v := range pwmLines {
+						v.SetFrequency(MOTOR_LOW)
+					}
+					time.Sleep(500 * time.Millisecond)
+					fmt.Println("\nArmed...")
+					armed = true
+				}
+			} else {
+				if ppm.channels[CHAN_SWITCH_LEFT] < 1100 {
+					fmt.Println("\nDisarmed...")
+					armed = false
+					for _, v := range pwmLines {
+						v.SetFrequency(0)
+					}
+				}
+				throttle := numMapInt(ppm.channels[CHAN_THROTTLE], PPM_LOW, PPM_HIGH, MOTOR_LOW, MOTOR_HIGH)
+				fmt.Printf("\rc:%d t:%d", ppm.channels[CHAN_THROTTLE], throttle)
+				for _, v := range pwmLines {
+					v.SetFrequency(throttle)
+				}
 			}
 
 			if ppmConnected && !connected {
@@ -159,4 +194,11 @@ func main() {
 	wg.Wait()
 
 	fmt.Println("\nexiting motor controller...")
+}
+
+func numMapFloat64(value, a, b, c, d float64) float64 {
+	return c + (value-a)*(d-c)/(b-a)
+}
+func numMapInt(value, a, b, c, d int) int {
+	return c + (value-a)*(d-c)/(b-a)
 }
